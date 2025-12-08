@@ -114,3 +114,8 @@ class RecommendResponse(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class ShoeDetectRequest(BaseModel):
+    user_id: int
+    shoe_id: int

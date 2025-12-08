@@ -1,4 +1,7 @@
 # app/main.py
+from datetime import datetime
+from typing import Optional
+
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -11,13 +14,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# 建立資料表（若尚未存在）
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Carry Helper Demo API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],        # Demo 用先放寬，之後可收斂成指定網域
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -147,27 +151,86 @@ def list_reminders_for_user(user_id: int, db: Session = Depends(get_db)):
 
 
 # =====================
-# Recommendations
+# Recommendations (GET)
 # =====================
 
-@app.post("/recommendations/", response_model=schemas.RecommendResponse)
+@app.get("/recommendations/", response_model=schemas.RecommendResponse)
 def get_recommendations(
-    req: schemas.RecommendRequest,
+    user_id: int,
+    shoe_type: str,
+    current_time: Optional[datetime] = None,
     db: Session = Depends(get_db),
 ):
+    """
+    給前端 / MCU 使用：
+
+    範例：
+    GET /recommendations/?user_id=1000&shoe_type=formal
+    GET /recommendations/?user_id=1000&shoe_type=sneaker&current_time=2025-12-08T10:00:00Z
+    """
+
     # 確認使用者存在
-    if not crud.get_user(db, req.user_id):
+    user = crud.get_user(db, user_id)
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     current_event, next_event, items = crud.infer_recommendations(
         db=db,
-        user_id=req.user_id,
-        shoe_type=req.shoe_type,
-        current_time=req.current_time,
+        user_id=user_id,
+        shoe_type=shoe_type,
+        current_time=current_time,
     )
 
+    # infer_recommendations 可能找不到未來行程 → 回傳空清單
     return schemas.RecommendResponse(
         current_event=current_event,
         next_event=next_event,
         items=items,
     )
+
+
+# =====================
+# Detect Shoe (MCU → 後端)
+# =====================
+
+@app.post("/detect_shoe/")
+def detect_shoe(req: schemas.ShoeDetectRequest, db: Session = Depends(get_db)):
+    """
+    提供給 MCU 使用：
+    MCU 只需傳入 user_id + shoe_id，
+    後端會查詢 user_shoes → 取得 shoe_type，
+    然後呼叫同一套推薦演算法，回傳推薦項目。
+
+    Request body:
+    {
+      "user_id": 1000,
+      "shoe_id": 3
+    }
+    """
+
+    # 1. 找鞋子資料（確認這雙鞋屬於該 user，並取得鞋子類型）
+    shoe = db.execute(
+        "SELECT shoe_type FROM user_shoes WHERE id = :id AND user_id = :uid",
+        {"id": req.shoe_id, "uid": req.user_id},
+    ).fetchone()
+
+    if not shoe:
+        raise HTTPException(status_code=404, detail="Shoe not found")
+
+    shoe_type = shoe[0]
+
+    # 2. 執行推薦演算法
+    current_event, next_event, items = crud.infer_recommendations(
+        db=db,
+        user_id=req.user_id,
+        shoe_type=shoe_type,
+        current_time=None,
+    )
+
+    # 3. 回傳給 MCU（包含鞋子類型 & 推薦清單）
+    return {
+        "shoe_type": shoe_type,
+        "current_event": current_event,
+        "next_event": next_event,
+        "items": items,
+    }
