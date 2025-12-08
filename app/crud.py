@@ -1,5 +1,9 @@
 # app/crud.py
+from datetime import datetime
+from typing import Optional, Dict, List
+
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from app import models, schemas
 
@@ -9,10 +13,6 @@ from app import models, schemas
 # =====================
 
 def create_user(db: Session, user_in: schemas.UserCreate) -> models.Users:
-    """
-    建立新使用者：
-    - user_id 由資料庫的 sequence 自動產生
-    """
     db_user = models.Users(
         user_name=user_in.user_name
     )
@@ -22,10 +22,7 @@ def create_user(db: Session, user_in: schemas.UserCreate) -> models.Users:
     return db_user
 
 
-def list_users(db: Session, skip: int = 0, limit: int = 100) -> list[models.Users]:
-    """
-    取得使用者列表，依建立時間排序
-    """
+def list_users(db: Session, skip: int = 0, limit: int = 100) -> List[models.Users]:
     return (
         db.query(models.Users)
         .order_by(models.Users.created_at.desc())
@@ -35,11 +32,8 @@ def list_users(db: Session, skip: int = 0, limit: int = 100) -> list[models.User
     )
 
 
-def get_user(db: Session, user_id: int) -> models.Users | None:
-    """
-    以 user_id（對外識別）取得使用者。
-    注意：這裡是 users.user_id 不是 users.id。
-    """
+def get_user(db: Session, user_id: int) -> Optional[models.Users]:
+    # 注意：這裡是 users.user_id
     return (
         db.query(models.Users)
         .filter(models.Users.user_id == user_id)
@@ -52,19 +46,14 @@ def get_user(db: Session, user_id: int) -> models.Users | None:
 # =====================
 
 def create_event(db: Session, ev_in: schemas.EventCreate) -> models.Events:
-    """
-    建立事件：
-    - 依 user_id 查出對應的 Users 記錄，填入 user_name
-    - main.py 會先用 get_user 檢查使用者存在
-    """
     db_user = get_user(db, ev_in.user_id)
     if not db_user:
-        # 理論上 main 那邊已經檢查過，但這裡再防一層
         raise ValueError(f"User with user_id={ev_in.user_id} not found")
 
     db_event = models.Events(
         user_id=db_user.user_id,
         user_name=db_user.user_name,
+        act_type=ev_in.act_type,
         title=ev_in.title,
         location=ev_in.location,
         start_time=ev_in.start_time,
@@ -76,10 +65,7 @@ def create_event(db: Session, ev_in: schemas.EventCreate) -> models.Events:
     return db_event
 
 
-def list_events(db: Session, skip: int = 0, limit: int = 100) -> list[models.Events]:
-    """
-    取得全部事件列表，依 start_time 排序（無 start_time 的排在後面）
-    """
+def list_events(db: Session, skip: int = 0, limit: int = 100) -> List[models.Events]:
     return (
         db.query(models.Events)
         .order_by(models.Events.start_time.is_(None), models.Events.start_time.asc())
@@ -89,10 +75,7 @@ def list_events(db: Session, skip: int = 0, limit: int = 100) -> list[models.Eve
     )
 
 
-def get_event(db: Session, event_id: int) -> models.Events | None:
-    """
-    以 id 取得單一事件。
-    """
+def get_event(db: Session, event_id: int) -> Optional[models.Events]:
     return (
         db.query(models.Events)
         .filter(models.Events.id == event_id)
@@ -100,11 +83,7 @@ def get_event(db: Session, event_id: int) -> models.Events | None:
     )
 
 
-def list_events_for_user(db: Session, user_id: int) -> list[models.Events]:
-    """
-    取得某使用者的所有事件：
-    - 以 Events.user_id == users.user_id 查
-    """
+def list_events_for_user(db: Session, user_id: int) -> List[models.Events]:
     return (
         db.query(models.Events)
         .filter(models.Events.user_id == user_id)
@@ -120,11 +99,6 @@ def list_events_for_user(db: Session, user_id: int) -> list[models.Events]:
 def create_event_item(
     db: Session, item_in: schemas.EventItemCreate
 ) -> models.EventItems:
-    """
-    建立事件物品：
-    - 透過 event_id 查出 Events，使用它的 user_id & user_name
-    - 這樣就不用前端傳 user_name，避免不一致
-    """
     db_event = get_event(db, item_in.event_id)
     if not db_event:
         raise ValueError(f"Event with id={item_in.event_id} not found")
@@ -144,10 +118,7 @@ def create_event_item(
 
 def list_event_items(
     db: Session, skip: int = 0, limit: int = 100
-) -> list[models.EventItems]:
-    """
-    取得所有事件物品
-    """
+) -> List[models.EventItems]:
     return (
         db.query(models.EventItems)
         .order_by(models.EventItems.created_at.desc())
@@ -157,10 +128,7 @@ def list_event_items(
     )
 
 
-def get_event_item(db: Session, item_id: int) -> models.EventItems | None:
-    """
-    取得單一事件物品
-    """
+def get_event_item(db: Session, item_id: int) -> Optional[models.EventItems]:
     return (
         db.query(models.EventItems)
         .filter(models.EventItems.id == item_id)
@@ -170,10 +138,7 @@ def get_event_item(db: Session, item_id: int) -> models.EventItems | None:
 
 def list_items_for_event(
     db: Session, event_id: int
-) -> list[models.EventItems]:
-    """
-    取得特定事件底下的所有物品
-    """
+) -> List[models.EventItems]:
     return (
         db.query(models.EventItems)
         .filter(models.EventItems.event_id == event_id)
@@ -189,11 +154,6 @@ def list_items_for_event(
 def create_reminder_log(
     db: Session, r_in: schemas.ReminderLogCreate
 ) -> models.ReminderLogs:
-    """
-    建立提醒紀錄：
-    - 依 user_id 查出 user_name
-    - 可同時檢查 event 是否存在，避免寫入無效 event_id
-    """
     db_user = get_user(db, r_in.user_id)
     if not db_user:
         raise ValueError(f"User with user_id={r_in.user_id} not found")
@@ -217,10 +177,7 @@ def create_reminder_log(
 
 def list_reminder_logs(
     db: Session, skip: int = 0, limit: int = 100
-) -> list[models.ReminderLogs]:
-    """
-    取得全部提醒紀錄
-    """
+) -> List[models.ReminderLogs]:
     return (
         db.query(models.ReminderLogs)
         .order_by(models.ReminderLogs.created_at.desc())
@@ -230,10 +187,7 @@ def list_reminder_logs(
     )
 
 
-def get_reminder_log(db: Session, log_id: int) -> models.ReminderLogs | None:
-    """
-    取得單一提醒紀錄
-    """
+def get_reminder_log(db: Session, log_id: int) -> Optional[models.ReminderLogs]:
     return (
         db.query(models.ReminderLogs)
         .filter(models.ReminderLogs.id == log_id)
@@ -243,14 +197,128 @@ def get_reminder_log(db: Session, log_id: int) -> models.ReminderLogs | None:
 
 def list_reminders_for_user(
     db: Session, user_id: int
-) -> list[models.ReminderLogs]:
-    """
-    取得某使用者的所有提醒紀錄：
-    - 以 ReminderLogs.user_id（= users.user_id）查
-    """
+) -> List[models.ReminderLogs]:
     return (
         db.query(models.ReminderLogs)
         .filter(models.ReminderLogs.user_id == user_id)
         .order_by(models.ReminderLogs.created_at.desc())
         .all()
     )
+
+
+# =====================
+# Recommendation Logic
+# =====================
+
+def _get_main_shoe_for_act(db: Session, act_type: str) -> Optional[str]:
+    """
+    從規則表中找出此 act_type 最常用的鞋子類型（這裡簡化抓第一筆有鞋子的規則）
+    """
+    rule = (
+        db.query(models.ActivityItemRule)
+        .filter(
+            models.ActivityItemRule.act_type == act_type,
+            models.ActivityItemRule.shoe_type.isnot(None),
+        )
+        .first()
+    )
+    return rule.shoe_type if rule else None
+
+
+def _get_items_for_event(
+    db: Session, act_type: str, shoe_type: str
+) -> Dict[str, int]:
+    """
+    根據活動類型 + 鞋子，從規則表抓出建議物品與權重
+    """
+    rules = (
+        db.query(models.ActivityItemRule)
+        .filter(models.ActivityItemRule.act_type == act_type)
+        .filter(
+            or_(
+                models.ActivityItemRule.shoe_type.is_(None),
+                models.ActivityItemRule.shoe_type == shoe_type,
+            )
+        )
+        .all()
+    )
+
+    scores: Dict[str, int] = {}
+    for r in rules:
+        scores[r.item_name] = scores.get(r.item_name, 0) + (r.base_priority or 0)
+    return scores
+
+
+def infer_recommendations(
+    db: Session,
+    user_id: int,
+    shoe_type: str,
+    current_time: Optional[datetime] = None,
+):
+    """
+    推算「推薦攜帶項目」的核心邏輯：
+
+    1. 找出 user_id 未來的行程（按照 start_time 排序）
+    2. current_event = 最接近 current_time 的下一個行程
+       next_event    = 其下一個行程（如果有的話）
+    3. 判斷鞋子：
+       - 若使用者穿的是 next_event 的鞋子且 != current_event 的鞋子
+         => 推薦項目 = current_event + next_event 需要的物品
+       - 否則只推薦 current_event 的物品
+    """
+
+    if current_time is None:
+        current_time = datetime.utcnow()
+
+    upcoming: List[models.Events] = (
+        db.query(models.Events)
+        .filter(
+            models.Events.user_id == user_id,
+            models.Events.start_time >= current_time,
+        )
+        .order_by(models.Events.start_time.asc())
+        .limit(2)
+        .all()
+    )
+
+    if not upcoming:
+        return None, None, []
+
+    current_event = upcoming[0]
+    next_event = upcoming[1] if len(upcoming) > 1 else None
+
+    current_shoe = (
+        _get_main_shoe_for_act(db, current_event.act_type)
+        if current_event.act_type
+        else None
+    )
+
+    include_next = False
+    next_shoe = None
+    if next_event and next_event.act_type:
+        next_shoe = _get_main_shoe_for_act(db, next_event.act_type)
+        # 只有在「穿的是下一個行程的鞋」且「不是現在行程預設鞋」時，才合併下一個行程的物品
+        if next_shoe and shoe_type == next_shoe and shoe_type != current_shoe:
+            include_next = True
+
+    # 先加入目前行程的物品
+    scores = {}
+    if current_event.act_type:
+        scores.update(_get_items_for_event(db, current_event.act_type, shoe_type))
+
+    # 視需要合併下一個行程
+    if include_next and next_event and next_event.act_type:
+        next_scores = _get_items_for_event(db, next_event.act_type, shoe_type)
+        for item_name, sc in next_scores.items():
+            scores[item_name] = scores.get(item_name, 0) + sc
+
+    # 依權重排序
+    sorted_items = [
+        name for name, _ in sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+    # 若沒合併，就讓 next_event = None 比較清楚
+    if not include_next:
+        next_event = None
+
+    return current_event, next_event, sorted_items
