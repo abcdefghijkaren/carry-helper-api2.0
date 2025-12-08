@@ -88,3 +88,13 @@ class ActivityItemRule(Base):
     shoe_type = Column(Text)                      # sneaker / formal / slipper / NULL
     time_tag = Column(Text)                       # 可先不使用
     is_default = Column(Boolean, nullable=False, default=False)
+
+
+class UserShoes(Base):
+    __tablename__ = "user_shoes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False)
+    shoe_name = Column(Text, nullable=False)
+    shoe_type = Column(Text, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

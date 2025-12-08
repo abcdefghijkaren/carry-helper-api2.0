@@ -203,21 +203,25 @@ def detect_shoe(req: schemas.ShoeDetectRequest, db: Session = Depends(get_db)):
 
     Request body:
     {
-      "user_id": 1000,
-      "shoe_id": 3
+      "user_id": 2,
+      "shoe_id": 1
     }
     """
 
-    # 1. 找鞋子資料（確認這雙鞋屬於該 user，並取得鞋子類型）
-    shoe = db.execute(
-        "SELECT shoe_type FROM user_shoes WHERE id = :id AND user_id = :uid",
-        {"id": req.shoe_id, "uid": req.user_id},
-    ).fetchone()
+    # 1. 用 ORM 查鞋子資料（確認這雙鞋屬於該 user，並取得鞋子類型）
+    shoe = (
+        db.query(models.UserShoes)
+        .filter(
+            models.UserShoes.id == req.shoe_id,
+            models.UserShoes.user_id == req.user_id,
+        )
+        .first()
+    )
 
     if not shoe:
-        raise HTTPException(status_code=404, detail="Shoe not found")
+        raise HTTPException(status_code=404, detail="Shoe not found for this user")
 
-    shoe_type = shoe[0]
+    shoe_type = shoe.shoe_type
 
     # 2. 執行推薦演算法
     current_event, next_event, items = crud.infer_recommendations(
