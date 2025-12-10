@@ -28,18 +28,20 @@ class UserRead(BaseModel):
 
 class EventCreate(BaseModel):
     user_id: int
-    act_type: str  # class / exercise / bill / snack / meet...
+    user_name: str
+    act_type: str
     title: str
     location: Optional[str] = None
     start_time: datetime
     end_time: datetime
 
 
+
 class EventRead(BaseModel):
     id: int
     user_id: int
     user_name: str
-    act_type: Optional[str] = None
+    act_type: str
     title: str
     location: Optional[str] = None
     start_time: datetime
