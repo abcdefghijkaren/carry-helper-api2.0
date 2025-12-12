@@ -148,7 +148,7 @@ class CommonItemsByShoeResponse(BaseModel):
 # Total Items
 # =====================
 
-class MCUItemsResponse(BaseModel):
+class MCUAllItemsResponse(BaseModel):
     user_id: int
     shoe_id: int
     shoe_type: str

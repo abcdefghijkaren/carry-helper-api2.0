@@ -253,8 +253,8 @@ def mcu_common_items(
     return result
 
 
-@app.get("/mcu/Total_items", response_model=schemas.MCUItemsResponse)
-def mcu_items(
+@app.get("/mcu/all_items", response_model=schemas.MCUItemsResponse)
+def mcu_all_items(
     user_id: int = Query(..., description="users.user_id, demo=2"),
     shoe_id: int = Query(..., description="user_shoes.id (MCU shoe id), demo=1/2/3"),
     current_time: Optional[datetime] = Query(None),
@@ -265,7 +265,7 @@ def mcu_items(
     /mcu/items?user_id=2&shoe_id=1
     """
     try:
-        return crud.build_mcu_items(
+        return crud.build_mcu_all_items(
             db=db,
             user_id=user_id,
             shoe_id=shoe_id,

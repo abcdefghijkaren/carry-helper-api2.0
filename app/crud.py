@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional, Dict, List, Tuple, Set
 
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 
 from app import models, schemas
 
@@ -420,7 +420,7 @@ def infer_recommendations(
 # 固定共同必帶
 COMMON_ITEMS = ["phone", "wallet", "key"]
 
-def build_mcu_items(
+def build_mcu_all_items(
     db: Session,
     user_id: int,
     shoe_id: int,
@@ -435,8 +435,8 @@ def build_mcu_items(
 
     # 1) 用 user_shoes 將 shoe_id -> shoe_type
     row = db.execute(
-        "SELECT shoe_type FROM public.user_shoes WHERE id = :sid AND user_id = :uid",
-        {"sid": shoe_id, "uid": user_id},
+    text("SELECT shoe_type FROM public.user_shoes WHERE id = :sid AND user_id = :uid"),
+    {"sid": shoe_id, "uid": user_id},
     ).fetchone()
 
     if not row:
