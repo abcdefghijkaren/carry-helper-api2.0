@@ -237,6 +237,20 @@ def list_reminders_for_user(
 
 
 # =====================
+# Find CommonItemsByShoe
+# =====================
+
+def get_common_items_by_shoe(db: Session, shoe_type: str) -> List[str]:
+    rows = (
+        db.query(models.CommonItemsByShoe)
+        .filter(models.CommonItemsByShoe.shoe_type == shoe_type)
+        .order_by(models.CommonItemsByShoe.id.asc())
+        .all()
+    )
+    return [r.item_name for r in rows]
+
+
+# =====================
 # Recommendation Helpers & Core Logic
 # =====================
 

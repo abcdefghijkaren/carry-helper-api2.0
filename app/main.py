@@ -92,57 +92,57 @@ def list_user_events(user_id: int, db: Session = Depends(get_db)):
     return crud.list_events_for_user(db, user_id)
 
 
-# =====================
-# Event Items
-# =====================
+# # =====================
+# # Event Items
+# # =====================
 
-@app.post("/event_items/", response_model=schemas.EventItemRead)
-def create_event_item(item_in: schemas.EventItemCreate, db: Session = Depends(get_db)):
-    if not crud.get_event(db, item_in.event_id):
-        raise HTTPException(status_code=404, detail="Event not found")
-    return crud.create_event_item(db, item_in)
-
-
-@app.get("/event_items/", response_model=list[schemas.EventItemRead])
-def read_event_items(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.list_event_items(db, skip, limit)
+# @app.post("/event_items/", response_model=schemas.EventItemRead)
+# def create_event_item(item_in: schemas.EventItemCreate, db: Session = Depends(get_db)):
+#     if not crud.get_event(db, item_in.event_id):
+#         raise HTTPException(status_code=404, detail="Event not found")
+#     return crud.create_event_item(db, item_in)
 
 
-@app.get("/event_items/{item_id}", response_model=schemas.EventItemRead)
-def get_event_item(item_id: int, db: Session = Depends(get_db)):
-    item = crud.get_event_item(db, item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    return item
+# @app.get("/event_items/", response_model=list[schemas.EventItemRead])
+# def read_event_items(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+#     return crud.list_event_items(db, skip, limit)
 
 
-@app.get("/events/{event_id}/items", response_model=list[schemas.EventItemRead])
-def list_items_for_event(event_id: int, db: Session = Depends(get_db)):
-    return crud.list_items_for_event(db, event_id)
+# @app.get("/event_items/{item_id}", response_model=schemas.EventItemRead)
+# def get_event_item(item_id: int, db: Session = Depends(get_db)):
+#     item = crud.get_event_item(db, item_id)
+#     if not item:
+#         raise HTTPException(status_code=404, detail="Item not found")
+#     return item
 
 
-# =====================
-# Reminder Logs
-# =====================
-
-@app.post("/reminder_logs/", response_model=schemas.ReminderLogRead)
-def create_reminder_log(r_in: schemas.ReminderLogCreate, db: Session = Depends(get_db)):
-    if not crud.get_user(db, r_in.user_id):
-        raise HTTPException(status_code=404, detail="User not found")
-    return crud.create_reminder_log(db, r_in)
+# @app.get("/events/{event_id}/items", response_model=list[schemas.EventItemRead])
+# def list_items_for_event(event_id: int, db: Session = Depends(get_db)):
+#     return crud.list_items_for_event(db, event_id)
 
 
-@app.get("/reminder_logs/", response_model=list[schemas.ReminderLogRead])
-def read_reminder_logs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.list_reminder_logs(db, skip, limit)
+# # =====================
+# # Reminder Logs
+# # =====================
+
+# @app.post("/reminder_logs/", response_model=schemas.ReminderLogRead)
+# def create_reminder_log(r_in: schemas.ReminderLogCreate, db: Session = Depends(get_db)):
+#     if not crud.get_user(db, r_in.user_id):
+#         raise HTTPException(status_code=404, detail="User not found")
+#     return crud.create_reminder_log(db, r_in)
 
 
-@app.get("/reminder_logs/{log_id}", response_model=schemas.ReminderLogRead)
-def get_reminder_log(log_id: int, db: Session = Depends(get_db)):
-    log = crud.get_reminder_log(db, log_id)
-    if not log:
-        raise HTTPException(status_code=404, detail="Reminder log not found")
-    return log
+# @app.get("/reminder_logs/", response_model=list[schemas.ReminderLogRead])
+# def read_reminder_logs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+#     return crud.list_reminder_logs(db, skip, limit)
+
+
+# @app.get("/reminder_logs/{log_id}", response_model=schemas.ReminderLogRead)
+# def get_reminder_log(log_id: int, db: Session = Depends(get_db)):
+#     log = crud.get_reminder_log(db, log_id)
+#     if not log:
+#         raise HTTPException(status_code=404, detail="Reminder log not found")
+#     return log
 
 
 @app.get("/users/{user_id}/reminders", response_model=list[schemas.ReminderLogRead])
@@ -237,4 +237,20 @@ def detect_shoe(req: schemas.ShoeDetectRequest, db: Session = Depends(get_db)):
         "current_event": current_event,
         "next_event": next_event,
         "items": items,
+    }
+
+@app.get("/mcu/common_items")
+def get_common_items_by_shoe(
+    shoe_type: str,
+    db: Session = Depends(get_db)
+):
+    rows = (
+        db.query(models.CommonItemsByShoe)
+        .filter(models.CommonItemsByShoe.shoe_type == shoe_type)
+        .all()
+    )
+
+    return {
+        "shoe_type": shoe_type,
+        "items": [r.item_name for r in rows]
     }

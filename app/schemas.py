@@ -121,3 +121,22 @@ class RecommendResponse(BaseModel):
 class ShoeDetectRequest(BaseModel):
     user_id: int
     shoe_id: int
+
+
+# =====================
+# CommonItemsByShoe
+# =====================
+
+class CommonItemByShoeRead(BaseModel):
+    id: int
+    shoe_type: str
+    item_name: str
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class CommonItemsResponse(BaseModel):
+    shoe_type: str
+    items: List[str]
