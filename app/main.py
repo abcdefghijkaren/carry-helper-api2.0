@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -251,3 +251,25 @@ def mcu_common_items(
         raise HTTPException(status_code=404, detail="Shoe ID not found")
 
     return result
+
+
+@app.get("/mcu/Total_items", response_model=schemas.MCUItemsResponse)
+def mcu_items(
+    user_id: int = Query(..., description="users.user_id, demo=2"),
+    shoe_id: int = Query(..., description="user_shoes.id (MCU shoe id), demo=1/2/3"),
+    current_time: Optional[datetime] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    MCU 用 GET：
+    /mcu/items?user_id=2&shoe_id=1
+    """
+    try:
+        return crud.build_mcu_items(
+            db=db,
+            user_id=user_id,
+            shoe_id=shoe_id,
+            current_time=current_time,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

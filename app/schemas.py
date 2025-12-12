@@ -142,3 +142,20 @@ class CommonItemsByShoeResponse(BaseModel):
     shoe_id: int
     shoe_type: str
     items: List[str]
+
+
+# =====================
+# Total Items
+# =====================
+
+class MCUItemsResponse(BaseModel):
+    user_id: int
+    shoe_id: int
+    shoe_type: str
+
+    common_items: List[str]              # phone/wallet/key
+    common_items_by_shoe: List[str]      # 由 common_items_by_shoe 表取得
+    recommendations: List[str]           # 由 activity_item_rules 推算（你已經做好的那套）
+
+    class Config:
+        orm_mode = True

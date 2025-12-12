@@ -416,3 +416,59 @@ def infer_recommendations(
         next_event = None
 
     return current_event, next_event, items
+
+# 固定共同必帶
+COMMON_ITEMS = ["phone", "wallet", "key"]
+
+def build_mcu_items(
+    db: Session,
+    user_id: int,
+    shoe_id: int,
+    current_time: Optional[datetime] = None,
+) -> Dict:
+    """
+    給 MCU 用：依 user_id + shoe_id 回傳三類清單
+    - common_items
+    - common_items_by_shoe
+    - recommendations (activity_item_rules 推算)
+    """
+
+    # 1) 用 user_shoes 將 shoe_id -> shoe_type
+    row = db.execute(
+        "SELECT shoe_type FROM public.user_shoes WHERE id = :sid AND user_id = :uid",
+        {"sid": shoe_id, "uid": user_id},
+    ).fetchone()
+
+    if not row:
+        raise ValueError("Shoe not found")
+
+    shoe_type = row[0]
+
+    # 2) 鞋子額外必帶（common_items_by_shoe 表）
+    common_by_shoe = get_common_items_by_shoe_id(db, shoe_id)  # 你已經有這個函式
+    shoe_items = common_by_shoe.get("items", [])
+
+    # 3) 活動推薦（只從 activity_item_rules）
+    # 你已經有 infer_recommendations() -> (current_event, next_event, items)
+    # 其中 items 是你的 Top3>=7 + 第4/5 規則（只取 activity_item_rules）
+    _, _, rec_items = infer_recommendations(
+        db=db,
+        user_id=user_id,
+        shoe_type=shoe_type,
+        current_time=current_time,
+    )
+
+    # 4) 去重（避免同一物品重複出現在 recommendations）
+    rec_unique = []
+    for x in rec_items:
+        if x not in rec_unique:
+            rec_unique.append(x)
+
+    return {
+        "user_id": user_id,
+        "shoe_id": shoe_id,
+        "shoe_type": shoe_type,
+        "common_items": COMMON_ITEMS,
+        "common_items_by_shoe": shoe_items,
+        "recommendations": rec_unique,
+    }
