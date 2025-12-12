@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Set
 
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -304,126 +304,83 @@ def _get_rules_for_event(
     )
 
 
-def infer_recommendations(
-    db: Session,
-    user_id: int,
-    shoe_type: str,
-    current_time: Optional[datetime] = None,
-) -> Tuple[Optional[models.Events], Optional[models.Events], List[str]]:
-    """
-    回傳（current_event, next_event_or_None, items）
-    items = MUST + EXTRA（已去重、控制數量、不吵版本）
-    """
-    if current_time is None:
-        current_time = datetime.utcnow()
+TOP3_MIN_SCORE = 7
+EXTRA_MIN_SCORE = 7
+TOP3_LIMIT = 3
+EXTRA_MAX = 5  # 可能到第4、第5（最多 5 個）
 
-    # 1) 最近兩筆未來行程
-    upcoming = (
-        db.query(models.Events)
+
+def _rules_for_act(db: Session, act_type: str, shoe_type: str) -> List[models.ActivityItemRule]:
+    """
+    取出某 act_type 在目前鞋型下可用的規則（含通用 shoe_type=NULL 規則）。
+    """
+    return (
+        db.query(models.ActivityItemRule)
+        .filter(models.ActivityItemRule.act_type == act_type)
         .filter(
-            models.Events.user_id == user_id,
-            models.Events.start_time >= current_time,
+            or_(
+                models.ActivityItemRule.shoe_type.is_(None),
+                models.ActivityItemRule.shoe_type == shoe_type,
+            )
         )
-        .order_by(models.Events.start_time.asc())
-        .limit(2)
         .all()
     )
-    if not upcoming:
-        return None, None, []
 
-    current_event = upcoming[0]
-    next_event = upcoming[1] if len(upcoming) > 1 else None
 
-    # 2) 判斷是否接續下一行程 include_next
-    current_shoe = _get_main_shoe_for_act(db, current_event.act_type) if current_event.act_type else None
-    include_next = False
-    next_shoe = None
-    if next_event and next_event.act_type:
-        next_shoe = _get_main_shoe_for_act(db, next_event.act_type)
-        if next_shoe and shoe_type == next_shoe and shoe_type != current_shoe:
-            include_next = True
+def get_activity_extra_recs(
+    db: Session,
+    current_act_type: str,
+    shoe_type: str,
+    next_act_type: Optional[str] = None,
+    include_next: bool = False,
+) -> List[str]:
+    """
+    只從 activity_item_rules 產生「額外推薦」項目（不含必帶/共同/鞋子額外）。
 
-    # 3) 取規則（current / next）
-    cur_rules = _get_rules_for_event(db, current_event.act_type, shoe_type) if current_event.act_type else []
-    nxt_rules = _get_rules_for_event(db, next_event.act_type, shoe_type) if (include_next and next_event and next_event.act_type) else []
+    規則：
+    1) 先挑 Top3：分數 >= 7 的前三名
+    2) 第4、第5...：只收 (重疊) 或 (分數>=7) 的候選，最多到 5 個
+    """
 
-    # 4) Must：固定三項 + 鞋子額外（如果你是從 common_items_by_shoe 合併，這裡請改成你現有的函式）
-    # 這裡假設你已經有 crud.get_common_items_by_shoe_id 或依 shoe_type 查的函式
-    # 先用 shoe_type 版本示意（你可換成 shoe_id 版本）
-    shoe_extra = []
-    try:
-        shoe_extra = [
-            r.item_name
-            for r in db.query(models.CommonItemsByShoe)
-            .filter(models.CommonItemsByShoe.shoe_type == shoe_type)
-            .all()
-        ]
-    except Exception:
-        shoe_extra = []
+    # 1) 收集 current / next 的規則（只用非 default 的做「額外推薦」）
+    cur_rules = _rules_for_act(db, current_act_type, shoe_type) if current_act_type else []
+    nxt_rules = []
+    if include_next and next_act_type:
+        nxt_rules = _rules_for_act(db, next_act_type, shoe_type)
 
-    must: List[str] = []
-    for x in COMMON_FIXED + shoe_extra:
-        if x not in must:
-            must.append(x)
+    # 2) 建 overlap（同 item 同時出現在 current+next）
+    cur_set: Set[str] = set([r.item_name for r in cur_rules if r.item_name])
+    nxt_set: Set[str] = set([r.item_name for r in nxt_rules if r.item_name])
+    overlap: Set[str] = cur_set.intersection(nxt_set) if include_next else set()
 
-    # 加入 default（current + 若 include_next 則 next）
-    def _add_defaults(rules: List[models.ActivityItemRule]):
-        for r in rules:
-            if getattr(r, "is_default", False):
-                if r.item_name and r.item_name not in must:
-                    must.append(r.item_name)
-
-    _add_defaults(cur_rules)
-    _add_defaults(nxt_rules)
-
-    # 5) Extra：先計分（只看非 default）
-    # 同時建立「重疊集合」：出現在 current 和 next 的 item
-    cur_items_set: Set[str] = set([r.item_name for r in cur_rules if r.item_name])
-    nxt_items_set: Set[str] = set([r.item_name for r in nxt_rules if r.item_name])
-    overlap_items: Set[str] = cur_items_set.intersection(nxt_items_set) if include_next else set()
-
+    # 3) 累積分數（只算非 default）
     scores: Dict[str, int] = {}
 
-    def _accumulate_non_default(rules: List[models.ActivityItemRule]):
+    def acc(rules: List[models.ActivityItemRule]):
         for r in rules:
             if not r.item_name:
                 continue
             if getattr(r, "is_default", False):
-                continue
-            base = r.base_priority or 0
-            scores[r.item_name] = scores.get(r.item_name, 0) + base
+                continue  # 額外推薦不包含 default
+            scores[r.item_name] = scores.get(r.item_name, 0) + (r.base_priority or 0)
 
-    _accumulate_non_default(cur_rules)
-    _accumulate_non_default(nxt_rules)
+    acc(cur_rules)
+    acc(nxt_rules)
 
-    # 把已在 must 的排除掉（避免重複吵）
-    for m in must:
-        scores.pop(m, None)
-
-    # 排序候選（高分在前）
+    # 4) 排序候選
     candidates = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
 
+    # 5) Top3（>=7）
+    top3 = [name for name, sc in candidates if sc >= TOP3_MIN_SCORE][:TOP3_LIMIT]
+
+    # 6) 第4、第5...：只收 (重疊) 或 (>=7)
     extra: List[str] = []
-
-    # 5-1) 先塞前 3 個（如果有）
-    for name, _sc in candidates[:EXTRA_TOP_N]:
-        extra.append(name)
-
-    # 5-2) 再考慮第 4～5 個：必須 (重疊) 或 (>=7)
-    for name, sc in candidates[EXTRA_TOP_N:]:
-        if len(extra) >= EXTRA_MAX:
+    for name, sc in candidates:
+        if name in top3:
+            continue
+        if len(top3) + len(extra) >= EXTRA_MAX:
             break
-        if (name in overlap_items) or (sc >= EXTRA_SCORE_GATE):
+        if (name in overlap) or (sc >= EXTRA_MIN_SCORE):
             extra.append(name)
 
-    # 6) 最終 items（must + extra）
-    items: List[str] = []
-    for x in must + extra:
-        if x not in items:
-            items.append(x)
-
-    # 若不 include_next，就不要對外回 next_event
-    if not include_next:
-        next_event = None
-
-    return current_event, next_event, items
+    return top3 + extra
