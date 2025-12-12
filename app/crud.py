@@ -265,14 +265,14 @@ def get_common_items_by_shoe_id(db: Session, shoe_id: int) -> dict:
 # Recommendation Helpers & Core Logic
 # =====================
 
-def _get_main_shoe_for_act(db: Session, act_type: str) -> Optional[str]:
-    """
-    取得某個活動類型的「預設鞋型」。
+COMMON_FIXED = ["phone", "wallet", "key"]
 
-    通常在 activity_item_rules 表中，會針對同一個 act_type
-    重複出現相同的 shoe_type（例如：class → sneaker, meet → formal），
-    這裡只取第一筆有設定 shoe_type 的規則作為預設值。
-    """
+EXTRA_TOP_N = 3          # 先出 3 個
+EXTRA_MAX = 5            # 最多到第 4、5 個
+EXTRA_SCORE_GATE = 7     # 分數 >= 7 才能進入第 4、5 個（除非重疊）
+
+
+def _get_main_shoe_for_act(db: Session, act_type: str) -> Optional[str]:
     rule = (
         db.query(models.ActivityItemRule)
         .filter(
@@ -284,22 +284,14 @@ def _get_main_shoe_for_act(db: Session, act_type: str) -> Optional[str]:
     return rule.shoe_type if rule else None
 
 
-def _get_items_for_event(
+def _get_rules_for_event(
     db: Session, act_type: str, shoe_type: str
-) -> Dict[str, int]:
+) -> List[models.ActivityItemRule]:
     """
-    針對「單一活動 act_type + 使用者目前穿的鞋型 shoe_type」，計算每個物品的分數。
-
-    規則：
-    - act_type 必須相同
-    - rule.shoe_type == shoe_type → 視為符合條件
-    - rule.shoe_type IS NULL      → 通用規則，任何鞋型都適用
-
-    回傳：
-    - item_name → score 的 dict，例如：
-      { "id_card": 10, "laptop": 9, ... }
+    抓出符合 act_type + shoe_type 的規則（包含 is_default / base_priority）
+    - shoe_type 相同 or rule.shoe_type is NULL (通用)
     """
-    rules = (
+    return (
         db.query(models.ActivityItemRule)
         .filter(models.ActivityItemRule.act_type == act_type)
         .filter(
@@ -311,15 +303,6 @@ def _get_items_for_event(
         .all()
     )
 
-    scores: Dict[str, int] = {}
-    for r in rules:
-        if not r.item_name:
-            continue
-        base = r.base_priority or 0
-        scores[r.item_name] = scores.get(r.item_name, 0) + base
-
-    return scores
-
 
 def infer_recommendations(
     db: Session,
@@ -328,29 +311,13 @@ def infer_recommendations(
     current_time: Optional[datetime] = None,
 ) -> Tuple[Optional[models.Events], Optional[models.Events], List[str]]:
     """
-    核心推薦邏輯。
-
-    步驟：
-    1. 依 user_id 與 current_time 找出最近的 1～2 筆未來行程
-       → current_event 與 next_event。
-    2. 由 activity_item_rules 推估 current_event 與 next_event 的預設鞋型。
-    3. 判斷是否應該合併 next_event：
-         若 user_wearing_shoe == next_event_shoe
-         且 user_wearing_shoe != current_event_shoe
-         → 視為會從 current_event 直接接續 next_event，一起考慮。
-    4. 針對要考慮的活動：
-         - 根據 act_type + shoe_type 取出所有符合規則的物品
-         - 以 base_priority 累加分數
-    5. 依分數由高到低排序物品名稱，產生推薦清單。
-
-    回傳：
-    (current_event, next_event_or_None, sorted_item_list)
+    回傳（current_event, next_event_or_None, items）
+    items = MUST + EXTRA（已去重、控制數量、不吵版本）
     """
-    # 若未指定 current_time，預設使用目前 UTC 時間
     if current_time is None:
         current_time = datetime.utcnow()
 
-    # Step 1: 找出最近兩個未來行程
+    # 1) 最近兩筆未來行程
     upcoming = (
         db.query(models.Events)
         .filter(
@@ -361,52 +328,102 @@ def infer_recommendations(
         .limit(2)
         .all()
     )
-
     if not upcoming:
         return None, None, []
 
     current_event = upcoming[0]
     next_event = upcoming[1] if len(upcoming) > 1 else None
 
-    # Step 2: 推估這兩個行程的預設鞋型
-    current_shoe = (
-        _get_main_shoe_for_act(db, current_event.act_type)
-        if current_event.act_type
-        else None
-    )
-
+    # 2) 判斷是否接續下一行程 include_next
+    current_shoe = _get_main_shoe_for_act(db, current_event.act_type) if current_event.act_type else None
     include_next = False
-    next_shoe: Optional[str] = None
-
+    next_shoe = None
     if next_event and next_event.act_type:
         next_shoe = _get_main_shoe_for_act(db, next_event.act_type)
-
-        # 核心判斷：
-        # 若使用者實際穿的鞋 == next_event 的預設鞋型
-        # 且 != current_event 的預設鞋型
-        # → 視為會直接接續 next_event，一次出門要滿足兩個行程
         if next_shoe and shoe_type == next_shoe and shoe_type != current_shoe:
             include_next = True
 
-    # Step 3: 先取 current_event 的物品分數
-    scores: Dict[str, int] = {}
-    if current_event.act_type:
-        cur_scores = _get_items_for_event(db, current_event.act_type, shoe_type)
-        for name, sc in cur_scores.items():
-            scores[name] = scores.get(name, 0) + sc
+    # 3) 取規則（current / next）
+    cur_rules = _get_rules_for_event(db, current_event.act_type, shoe_type) if current_event.act_type else []
+    nxt_rules = _get_rules_for_event(db, next_event.act_type, shoe_type) if (include_next and next_event and next_event.act_type) else []
 
-    # Step 4: 若判定需要，合併 next_event 的物品分數
-    if include_next and next_event and next_event.act_type:
-        next_scores = _get_items_for_event(db, next_event.act_type, shoe_type)
-        for name, sc in next_scores.items():
-            scores[name] = scores.get(name, 0) + sc
-    else:
-        # 不合併時，next_event 對外就視為 None
+    # 4) Must：固定三項 + 鞋子額外（如果你是從 common_items_by_shoe 合併，這裡請改成你現有的函式）
+    # 這裡假設你已經有 crud.get_common_items_by_shoe_id 或依 shoe_type 查的函式
+    # 先用 shoe_type 版本示意（你可換成 shoe_id 版本）
+    shoe_extra = []
+    try:
+        shoe_extra = [
+            r.item_name
+            for r in db.query(models.CommonItemsByShoe)
+            .filter(models.CommonItemsByShoe.shoe_type == shoe_type)
+            .all()
+        ]
+    except Exception:
+        shoe_extra = []
+
+    must: List[str] = []
+    for x in COMMON_FIXED + shoe_extra:
+        if x not in must:
+            must.append(x)
+
+    # 加入 default（current + 若 include_next 則 next）
+    def _add_defaults(rules: List[models.ActivityItemRule]):
+        for r in rules:
+            if getattr(r, "is_default", False):
+                if r.item_name and r.item_name not in must:
+                    must.append(r.item_name)
+
+    _add_defaults(cur_rules)
+    _add_defaults(nxt_rules)
+
+    # 5) Extra：先計分（只看非 default）
+    # 同時建立「重疊集合」：出現在 current 和 next 的 item
+    cur_items_set: Set[str] = set([r.item_name for r in cur_rules if r.item_name])
+    nxt_items_set: Set[str] = set([r.item_name for r in nxt_rules if r.item_name])
+    overlap_items: Set[str] = cur_items_set.intersection(nxt_items_set) if include_next else set()
+
+    scores: Dict[str, int] = {}
+
+    def _accumulate_non_default(rules: List[models.ActivityItemRule]):
+        for r in rules:
+            if not r.item_name:
+                continue
+            if getattr(r, "is_default", False):
+                continue
+            base = r.base_priority or 0
+            scores[r.item_name] = scores.get(r.item_name, 0) + base
+
+    _accumulate_non_default(cur_rules)
+    _accumulate_non_default(nxt_rules)
+
+    # 把已在 must 的排除掉（避免重複吵）
+    for m in must:
+        scores.pop(m, None)
+
+    # 排序候選（高分在前）
+    candidates = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+
+    extra: List[str] = []
+
+    # 5-1) 先塞前 3 個（如果有）
+    for name, _sc in candidates[:EXTRA_TOP_N]:
+        extra.append(name)
+
+    # 5-2) 再考慮第 4～5 個：必須 (重疊) 或 (>=7)
+    for name, sc in candidates[EXTRA_TOP_N:]:
+        if len(extra) >= EXTRA_MAX:
+            break
+        if (name in overlap_items) or (sc >= EXTRA_SCORE_GATE):
+            extra.append(name)
+
+    # 6) 最終 items（must + extra）
+    items: List[str] = []
+    for x in must + extra:
+        if x not in items:
+            items.append(x)
+
+    # 若不 include_next，就不要對外回 next_event
+    if not include_next:
         next_event = None
 
-    # Step 5: 依分數由高到低排序，輸出物品名稱清單
-    sorted_items = [
-        name for name, _ in sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-    ]
-
-    return current_event, next_event, sorted_items
+    return current_event, next_event, items
