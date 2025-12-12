@@ -265,12 +265,6 @@ def get_common_items_by_shoe_id(db: Session, shoe_id: int) -> dict:
 # Recommendation Helpers & Core Logic
 # =====================
 
-COMMON_FIXED = ["phone", "wallet", "key"]
-
-EXTRA_TOP_N = 3          # 先出 3 個
-EXTRA_MAX = 5            # 最多到第 4、5 個
-EXTRA_SCORE_GATE = 7     # 分數 >= 7 才能進入第 4、5 個（除非重疊）
-
 
 def _get_main_shoe_for_act(db: Session, act_type: str) -> Optional[str]:
     rule = (
@@ -282,26 +276,6 @@ def _get_main_shoe_for_act(db: Session, act_type: str) -> Optional[str]:
         .first()
     )
     return rule.shoe_type if rule else None
-
-
-def _get_rules_for_event(
-    db: Session, act_type: str, shoe_type: str
-) -> List[models.ActivityItemRule]:
-    """
-    抓出符合 act_type + shoe_type 的規則（包含 is_default / base_priority）
-    - shoe_type 相同 or rule.shoe_type is NULL (通用)
-    """
-    return (
-        db.query(models.ActivityItemRule)
-        .filter(models.ActivityItemRule.act_type == act_type)
-        .filter(
-            or_(
-                models.ActivityItemRule.shoe_type.is_(None),
-                models.ActivityItemRule.shoe_type == shoe_type,
-            )
-        )
-        .all()
-    )
 
 
 TOP3_MIN_SCORE = 7
@@ -384,3 +358,61 @@ def get_activity_extra_recs(
             extra.append(name)
 
     return top3 + extra
+
+def infer_recommendations(
+    db: Session,
+    user_id: int,
+    shoe_type: str,
+    current_time: Optional[datetime] = None,
+) -> Tuple[Optional[models.Events], Optional[models.Events], List[str]]:
+    """
+    給 /recommendations 或 /detect_shoe 使用：
+    - 找出 current_event / next_event
+    - 判斷 include_next（鞋子是否代表會接續下一行程）
+    - 只回傳「activity_item_rules 的額外推薦」items（Top3>=7 + 第4第5條件）
+    """
+
+    if current_time is None:
+        current_time = datetime.utcnow()
+
+    # 1) 找最近兩筆未來行程
+    upcoming = (
+        db.query(models.Events)
+        .filter(
+            models.Events.user_id == user_id,
+            models.Events.start_time >= current_time,
+        )
+        .order_by(models.Events.start_time.asc())
+        .limit(2)
+        .all()
+    )
+
+    if not upcoming:
+        return None, None, []
+
+    current_event = upcoming[0]
+    next_event = upcoming[1] if len(upcoming) > 1 else None
+
+    # 2) 判斷 include_next
+    current_shoe = _get_main_shoe_for_act(db, current_event.act_type) if current_event.act_type else None
+    include_next = False
+
+    if next_event and next_event.act_type:
+        next_shoe = _get_main_shoe_for_act(db, next_event.act_type)
+        if next_shoe and shoe_type == next_shoe and shoe_type != current_shoe:
+            include_next = True
+
+    # 3) 只取 activity_item_rules 額外推薦（你要的那一包）
+    items = get_activity_extra_recs(
+        db=db,
+        current_act_type=current_event.act_type,
+        shoe_type=shoe_type,
+        next_act_type=(next_event.act_type if next_event else None),
+        include_next=include_next,
+    )
+
+    # 若沒有 include_next，就不要對外回 next_event（避免前端誤解）
+    if not include_next:
+        next_event = None
+
+    return current_event, next_event, items
