@@ -103,6 +103,7 @@ class CommonItemsByShoe(Base):
     __tablename__ = "common_items_by_shoe"
 
     id = Column(Integer, primary_key=True, index=True)
-    shoe_type = Column(Text, nullable=False)   # sneaker / formal / slipper
-    item_name = Column(Text, nullable=False)   # water_bottle / id_card / ...
+    shoe_id = Column(Integer, nullable=False)   # MCU 使用
+    shoe_type = Column(Text, nullable=False)    # backend 使用
+    item_name = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

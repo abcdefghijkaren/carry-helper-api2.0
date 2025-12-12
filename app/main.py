@@ -239,18 +239,15 @@ def detect_shoe(req: schemas.ShoeDetectRequest, db: Session = Depends(get_db)):
         "items": items,
     }
 
-@app.get("/mcu/common_items")
-def get_common_items_by_shoe(
-    shoe_type: str,
+
+@app.get("/mcu/common_items", response_model=schemas.CommonItemsByShoeResponse)
+def mcu_common_items(
+    shoe_id: int,
     db: Session = Depends(get_db)
 ):
-    rows = (
-        db.query(models.CommonItemsByShoe)
-        .filter(models.CommonItemsByShoe.shoe_type == shoe_type)
-        .all()
-    )
+    result = crud.get_common_items_by_shoe_id(db, shoe_id)
 
-    return {
-        "shoe_type": shoe_type,
-        "items": [r.item_name for r in rows]
-    }
+    if not result["items"]:
+        raise HTTPException(status_code=404, detail="Shoe ID not found")
+
+    return result

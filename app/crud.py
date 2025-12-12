@@ -240,14 +240,25 @@ def list_reminders_for_user(
 # Find CommonItemsByShoe
 # =====================
 
-def get_common_items_by_shoe(db: Session, shoe_type: str) -> List[str]:
+def get_common_items_by_shoe_id(db: Session, shoe_id: int) -> dict:
     rows = (
         db.query(models.CommonItemsByShoe)
-        .filter(models.CommonItemsByShoe.shoe_type == shoe_type)
-        .order_by(models.CommonItemsByShoe.id.asc())
+        .filter(models.CommonItemsByShoe.shoe_id == shoe_id)
         .all()
     )
-    return [r.item_name for r in rows]
+
+    if not rows:
+        return {"shoe_id": shoe_id, "shoe_type": None, "items": []}
+
+    shoe_type = rows[0].shoe_type
+    items = [r.item_name for r in rows]
+
+    return {
+        "shoe_id": shoe_id,
+        "shoe_type": shoe_type,
+        "items": items
+    }
+
 
 
 # =====================

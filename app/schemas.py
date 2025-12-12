@@ -129,6 +129,7 @@ class ShoeDetectRequest(BaseModel):
 
 class CommonItemByShoeRead(BaseModel):
     id: int
+    shoe_id: int
     shoe_type: str
     item_name: str
     created_at: datetime
@@ -137,6 +138,7 @@ class CommonItemByShoeRead(BaseModel):
         orm_mode = True
 
 
-class CommonItemsResponse(BaseModel):
+class CommonItemsByShoeResponse(BaseModel):
+    shoe_id: int
     shoe_type: str
     items: List[str]
