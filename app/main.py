@@ -253,7 +253,7 @@ def mcu_common_items(
     return result
 
 
-@app.get("/mcu/all_items", response_model=schemas.MCUItemsResponse)
+@app.get("/mcu/all_items", response_model=schemas.MCUAllItemsResponse)
 def mcu_all_items(
     user_id: int = Query(..., description="users.user_id, demo=2"),
     shoe_id: int = Query(..., description="user_shoes.id (MCU shoe id), demo=1/2/3"),
