@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Dict, List, Tuple, Set
+from typing import Optional, Dict, List, Tuple, Set, Any
 
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, text
@@ -20,7 +20,6 @@ def create_user(db: Session, user_in: schemas.UserCreate) -> models.Users:
     - users.user_name   (NOT NULL)
     - users.created_at  (default now())
     """
-    # schemas.UserCreate 可能叫 name 或 user_name，這裡做一下兼容
     user_name = getattr(user_in, "user_name", None) or getattr(user_in, "name", None)
     if not user_name:
         raise ValueError("UserCreate 需要 name 或 user_name 欄位")
@@ -70,7 +69,6 @@ def create_event(db: Session, ev_in: schemas.EventCreate) -> models.Events:
     - start_time: datetime
     - end_time:   datetime
     """
-
     db_ev = models.Events(
         user_id=ev_in.user_id,
         user_name=ev_in.user_name,
@@ -260,11 +258,66 @@ def get_common_items_by_shoe_id(db: Session, shoe_id: int) -> dict:
     }
 
 
+# =====================
+# Friend Demo (A) - Hardcoded "fake friend overlap" (NO DB)
+# =====================
+
+# 朋友專屬要帶的物品（寫死 demo 用）
+# 你可以自己換成餐券/小說等英文短字
+_FAKE_FRIEND_ITEMS = {
+    "friend_a": ["novel"],        # 假朋友A：小說
+    "friend_b": ["meal_coupon"],  # 假朋友B：餐券
+}
+
+
+def _fake_friend_items_for_event(ev: Optional[models.Events]) -> List[str]:
+    """
+    Demo版：不查朋友資料庫，直接依你的行程內容「推定」會遇到哪個朋友
+    目的：即使現場輸入行程日期，也能穩定觸發 friend_items
+    規則（可自行調整）：
+      - class / exercise：遇到 friend_a → novel
+      - meet / snack / bill：遇到 friend_b → meal_coupon
+    """
+    if not ev or not getattr(ev, "act_type", None):
+        return []
+
+    act = ev.act_type
+
+    if act in ("class", "exercise"):
+        return list(_FAKE_FRIEND_ITEMS["friend_a"])
+    if act in ("meet", "snack", "bill"):
+        return list(_FAKE_FRIEND_ITEMS["friend_b"])
+
+    return []
+
+
+def get_friend_items_demoA(
+    current_event: Optional[models.Events],
+    next_event: Optional[models.Events],
+    include_next: bool,
+) -> List[str]:
+    """
+    Demo A：用 current/next event 推定會遇到朋友
+    - current_event 一定看
+    - 若 include_next=True，next_event 也一起看（模擬接續行程會遇到朋友）
+    回傳去重後的 friend_items
+    """
+    items: List[str] = []
+    for x in _fake_friend_items_for_event(current_event):
+        if x not in items:
+            items.append(x)
+
+    if include_next:
+        for x in _fake_friend_items_for_event(next_event):
+            if x not in items:
+                items.append(x)
+
+    return items
+
 
 # =====================
-# Recommendation Helpers & Core Logic
+# Recommendation Helpers & Core Logic (DO NOT CHANGE)
 # =====================
-
 
 def _get_main_shoe_for_act(db: Session, act_type: str) -> Optional[str]:
     rule = (
@@ -316,18 +369,15 @@ def get_activity_extra_recs(
     2) 第4、第5...：只收 (重疊) 或 (分數>=7) 的候選，最多到 5 個
     """
 
-    # 1) 收集 current / next 的規則（只用非 default 的做「額外推薦」）
     cur_rules = _rules_for_act(db, current_act_type, shoe_type) if current_act_type else []
     nxt_rules = []
     if include_next and next_act_type:
         nxt_rules = _rules_for_act(db, next_act_type, shoe_type)
 
-    # 2) 建 overlap（同 item 同時出現在 current+next）
     cur_set: Set[str] = set([r.item_name for r in cur_rules if r.item_name])
     nxt_set: Set[str] = set([r.item_name for r in nxt_rules if r.item_name])
     overlap: Set[str] = cur_set.intersection(nxt_set) if include_next else set()
 
-    # 3) 累積分數（只算非 default）
     scores: Dict[str, int] = {}
 
     def acc(rules: List[models.ActivityItemRule]):
@@ -335,19 +385,16 @@ def get_activity_extra_recs(
             if not r.item_name:
                 continue
             if getattr(r, "is_default", False):
-                continue  # 額外推薦不包含 default
+                continue
             scores[r.item_name] = scores.get(r.item_name, 0) + (r.base_priority or 0)
 
     acc(cur_rules)
     acc(nxt_rules)
 
-    # 4) 排序候選
     candidates = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
 
-    # 5) Top3（>=7）
     top3 = [name for name, sc in candidates if sc >= TOP3_MIN_SCORE][:TOP3_LIMIT]
 
-    # 6) 第4、第5...：只收 (重疊) 或 (>=7)
     extra: List[str] = []
     for name, sc in candidates:
         if name in top3:
@@ -359,23 +406,23 @@ def get_activity_extra_recs(
 
     return top3 + extra
 
+
 def infer_recommendations(
     db: Session,
     user_id: int,
     shoe_type: str,
     current_time: Optional[datetime] = None,
-) -> Tuple[Optional[models.Events], Optional[models.Events], List[str]]:
+) -> Tuple[Optional[models.Events], Optional[models.Events], List[str], List[str]]:
     """
     給 /recommendations 或 /detect_shoe 使用：
     - 找出 current_event / next_event
     - 判斷 include_next（鞋子是否代表會接續下一行程）
-    - 只回傳「activity_item_rules 的額外推薦」items（Top3>=7 + 第4第5條件）
+    - 回傳 activity_item_rules 的額外推薦 items（Top3>=7 + 第4第5條件）
+    - Demo A: friend_items（不查DB，寫死假朋友）
     """
-
     if current_time is None:
         current_time = datetime.utcnow()
 
-    # 1) 找最近兩筆未來行程
     upcoming = (
         db.query(models.Events)
         .filter(
@@ -388,12 +435,11 @@ def infer_recommendations(
     )
 
     if not upcoming:
-        return None, None, []
+        return None, None, [], []
 
     current_event = upcoming[0]
     next_event = upcoming[1] if len(upcoming) > 1 else None
 
-    # 2) 判斷 include_next
     current_shoe = _get_main_shoe_for_act(db, current_event.act_type) if current_event.act_type else None
     include_next = False
 
@@ -402,7 +448,6 @@ def infer_recommendations(
         if next_shoe and shoe_type == next_shoe and shoe_type != current_shoe:
             include_next = True
 
-    # 3) 只取 activity_item_rules 額外推薦（你要的那一包）
     items = get_activity_extra_recs(
         db=db,
         current_act_type=current_event.act_type,
@@ -411,32 +456,40 @@ def infer_recommendations(
         include_next=include_next,
     )
 
-    # 若沒有 include_next，就不要對外回 next_event（避免前端誤解）
+    # Demo A：用 current/next event 推定朋友物品（不動原推薦算法）
+    friend_items = get_friend_items_demoA(
+        current_event=current_event,
+        next_event=next_event,
+        include_next=include_next,
+    )
+
     if not include_next:
         next_event = None
 
-    return current_event, next_event, items
+    return current_event, next_event, items, friend_items
+
 
 # 固定共同必帶
 COMMON_ITEMS = ["phone", "wallet", "key"]
+
 
 def build_mcu_all_items(
     db: Session,
     user_id: int,
     shoe_id: int,
     current_time: Optional[datetime] = None,
-) -> Dict:
+) -> Dict[str, Any]:
     """
-    給 MCU 用：依 user_id + shoe_id 回傳三類清單
+    給 MCU 用：依 user_id + shoe_id 回傳四類清單
     - common_items
     - common_items_by_shoe
     - recommendations (activity_item_rules 推算)
+    - friend_items (Demo A：寫死假朋友)
     """
 
-    # 1) 用 user_shoes 將 shoe_id -> shoe_type
     row = db.execute(
-    text("SELECT shoe_type FROM public.user_shoes WHERE id = :sid AND user_id = :uid"),
-    {"sid": shoe_id, "uid": user_id},
+        text("SELECT shoe_type FROM public.user_shoes WHERE id = :sid AND user_id = :uid"),
+        {"sid": shoe_id, "uid": user_id},
     ).fetchone()
 
     if not row:
@@ -444,22 +497,17 @@ def build_mcu_all_items(
 
     shoe_type = row[0]
 
-    # 2) 鞋子額外必帶（common_items_by_shoe 表）
-    common_by_shoe = get_common_items_by_shoe_id(db, shoe_id)  # 你已經有這個函式
+    common_by_shoe = get_common_items_by_shoe_id(db, shoe_id)
     shoe_items = common_by_shoe.get("items", [])
 
-    # 3) 活動推薦（只從 activity_item_rules）
-    # 你已經有 infer_recommendations() -> (current_event, next_event, items)
-    # 其中 items 是你的 Top3>=7 + 第4/5 規則（只取 activity_item_rules）
-    _, _, rec_items = infer_recommendations(
+    _, _, rec_items, friend_items = infer_recommendations(
         db=db,
         user_id=user_id,
         shoe_type=shoe_type,
         current_time=current_time,
     )
 
-    # 4) 去重（避免同一物品重複出現在 recommendations）
-    rec_unique = []
+    rec_unique: List[str] = []
     for x in rec_items:
         if x not in rec_unique:
             rec_unique.append(x)
@@ -471,4 +519,5 @@ def build_mcu_all_items(
         "common_items": COMMON_ITEMS,
         "common_items_by_shoe": shoe_items,
         "recommendations": rec_unique,
+        "friend_items": friend_items,
     }
