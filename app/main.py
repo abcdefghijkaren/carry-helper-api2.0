@@ -92,58 +92,9 @@ def list_user_events(user_id: int, db: Session = Depends(get_db)):
     return crud.list_events_for_user(db, user_id)
 
 
-# # =====================
-# # Event Items
-# # =====================
-
-# @app.post("/event_items/", response_model=schemas.EventItemRead)
-# def create_event_item(item_in: schemas.EventItemCreate, db: Session = Depends(get_db)):
-#     if not crud.get_event(db, item_in.event_id):
-#         raise HTTPException(status_code=404, detail="Event not found")
-#     return crud.create_event_item(db, item_in)
-
-
-# @app.get("/event_items/", response_model=list[schemas.EventItemRead])
-# def read_event_items(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-#     return crud.list_event_items(db, skip, limit)
-
-
-# @app.get("/event_items/{item_id}", response_model=schemas.EventItemRead)
-# def get_event_item(item_id: int, db: Session = Depends(get_db)):
-#     item = crud.get_event_item(db, item_id)
-#     if not item:
-#         raise HTTPException(status_code=404, detail="Item not found")
-#     return item
-
-
-# @app.get("/events/{event_id}/items", response_model=list[schemas.EventItemRead])
-# def list_items_for_event(event_id: int, db: Session = Depends(get_db)):
-#     return crud.list_items_for_event(db, event_id)
-
-
-# # =====================
-# # Reminder Logs
-# # =====================
-
-# @app.post("/reminder_logs/", response_model=schemas.ReminderLogRead)
-# def create_reminder_log(r_in: schemas.ReminderLogCreate, db: Session = Depends(get_db)):
-#     if not crud.get_user(db, r_in.user_id):
-#         raise HTTPException(status_code=404, detail="User not found")
-#     return crud.create_reminder_log(db, r_in)
-
-
-# @app.get("/reminder_logs/", response_model=list[schemas.ReminderLogRead])
-# def read_reminder_logs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-#     return crud.list_reminder_logs(db, skip, limit)
-
-
-# @app.get("/reminder_logs/{log_id}", response_model=schemas.ReminderLogRead)
-# def get_reminder_log(log_id: int, db: Session = Depends(get_db)):
-#     log = crud.get_reminder_log(db, log_id)
-#     if not log:
-#         raise HTTPException(status_code=404, detail="Reminder log not found")
-#     return log
-
+# =====================
+# Reminders (你目前保留的 endpoint)
+# =====================
 
 @app.get("/users/{user_id}/reminders", response_model=list[schemas.ReminderLogRead])
 def list_reminders_for_user(user_id: int, db: Session = Depends(get_db)):
@@ -152,6 +103,7 @@ def list_reminders_for_user(user_id: int, db: Session = Depends(get_db)):
 
 # =====================
 # Recommendations (GET)
+# - 這裡我幫你「把朋友推薦併進 items」(不改 schema)
 # =====================
 
 @app.get("/recommendations/", response_model=schemas.RecommendResponse)
@@ -162,14 +114,9 @@ def get_recommendations(
     db: Session = Depends(get_db),
 ):
     """
-    給前端 / MCU 使用：
-
-    範例：
-    GET /recommendations/?user_id=1000&shoe_type=formal
-    GET /recommendations/?user_id=1000&shoe_type=sneaker&current_time=2025-12-08T10:00:00Z
+    GET /recommendations/?user_id=2&shoe_type=formal
+    GET /recommendations/?user_id=2&shoe_type=sneaker&current_time=2025-12-08T10:00:00Z
     """
-
-    # 確認使用者存在
     user = crud.get_user(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -181,34 +128,44 @@ def get_recommendations(
         current_time=current_time,
     )
 
-    # infer_recommendations 可能找不到未來行程 → 回傳空清單
+    # ✅ 朋友攜帶推薦（append 到 items 最後）
+    base_time = current_time or datetime.utcnow()
+    friend_items = crud.get_friend_carry_recs_from_events(
+        db=db,
+        demo_user_id=user_id,
+        current_time=base_time,
+    )
+
+    # 去重 + 保持順序（items 先、friend_items 後）
+    merged = []
+    for x in items:
+        if x not in merged:
+            merged.append(x)
+    for x in friend_items:
+        if x not in merged:
+            merged.append(x)
+
     return schemas.RecommendResponse(
         current_event=current_event,
         next_event=next_event,
-        items=items,
+        items=merged,
     )
 
 
 # =====================
 # Detect Shoe (MCU → 後端)
+# - 同樣把朋友推薦併進 items
 # =====================
 
 @app.post("/detect_shoe/")
 def detect_shoe(req: schemas.ShoeDetectRequest, db: Session = Depends(get_db)):
     """
-    提供給 MCU 使用：
-    MCU 只需傳入 user_id + shoe_id，
-    後端會查詢 user_shoes → 取得 shoe_type，
-    然後呼叫同一套推薦演算法，回傳推薦項目。
-
     Request body:
     {
       "user_id": 2,
       "shoe_id": 1
     }
     """
-
-    # 1. 用 ORM 查鞋子資料（確認這雙鞋屬於該 user，並取得鞋子類型）
     shoe = (
         db.query(models.UserShoes)
         .filter(
@@ -217,13 +174,11 @@ def detect_shoe(req: schemas.ShoeDetectRequest, db: Session = Depends(get_db)):
         )
         .first()
     )
-
     if not shoe:
         raise HTTPException(status_code=404, detail="Shoe not found for this user")
 
     shoe_type = shoe.shoe_type
 
-    # 2. 執行推薦演算法
     current_event, next_event, items = crud.infer_recommendations(
         db=db,
         user_id=req.user_id,
@@ -231,14 +186,33 @@ def detect_shoe(req: schemas.ShoeDetectRequest, db: Session = Depends(get_db)):
         current_time=None,
     )
 
-    # 3. 回傳給 MCU（包含鞋子類型 & 推薦清單）
+    # ✅ 朋友攜帶推薦（append 到 items 最後）
+    base_time = datetime.utcnow()
+    friend_items = crud.get_friend_carry_recs_from_events(
+        db=db,
+        demo_user_id=req.user_id,
+        current_time=base_time,
+    )
+
+    merged = []
+    for x in items:
+        if x not in merged:
+            merged.append(x)
+    for x in friend_items:
+        if x not in merged:
+            merged.append(x)
+
     return {
         "shoe_type": shoe_type,
         "current_event": current_event,
         "next_event": next_event,
-        "items": items,
+        "items": merged,
     }
 
+
+# =====================
+# MCU helpers
+# =====================
 
 @app.get("/mcu/common_items", response_model=schemas.CommonItemsByShoeResponse)
 def mcu_common_items(
@@ -246,10 +220,8 @@ def mcu_common_items(
     db: Session = Depends(get_db)
 ):
     result = crud.get_common_items_by_shoe_id(db, shoe_id)
-
     if not result["items"]:
         raise HTTPException(status_code=404, detail="Shoe ID not found")
-
     return result
 
 
@@ -262,7 +234,7 @@ def mcu_all_items(
 ):
     """
     MCU 用 GET：
-    /mcu/items?user_id=2&shoe_id=1
+    /mcu/all_items?user_id=2&shoe_id=1
     """
     try:
         return crud.build_mcu_all_items(
@@ -273,3 +245,17 @@ def mcu_all_items(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# =====================
+# Friends carry (debug)
+# =====================
+
+@app.get("/friends-carry/{user_id}")
+def list_friends_carry(user_id: int, db: Session = Depends(get_db)):
+    rows = (
+        db.query(models.FriendsCarryRecommendations)
+        .filter(models.FriendsCarryRecommendations.user_id == user_id)
+        .all()
+    )
+    return [{"friend_name": r.friend_name, "carry_item": r.carry_item} for r in rows]

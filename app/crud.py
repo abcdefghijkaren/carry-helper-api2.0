@@ -236,6 +236,70 @@ def list_reminders_for_user(
     )
 
 
+def _time_overlap(a_start, a_end, b_start, b_end) -> bool:
+    # overlap if not separated
+    return not (a_end <= b_start or b_end <= a_start)
+
+def _get_friend_carry_items(db: Session, user_id: int):
+    return (
+        db.query(models.FriendsCarryRecommendations)
+        .filter(models.FriendsCarryRecommendations.user_id == user_id)
+        .all()
+    )
+
+def get_friend_carry_recs_from_events(
+    db: Session,
+    demo_user_id: int,
+    current_time: datetime,
+) -> List[str]:
+    """
+    Rule:
+    If demo_user event overlaps with friend's event at same location,
+    recommend carry_item for that friend.
+    """
+    rules = _get_friend_carry_items(db, demo_user_id)
+    if not rules:
+        return []
+
+    friend_names = [r.friend_name for r in rules]
+
+    demo_events = (
+        db.query(models.Events)
+        .filter(models.Events.user_id == demo_user_id, models.Events.start_time >= current_time)
+        .order_by(models.Events.start_time.asc())
+        .all()
+    )
+
+    friend_events = (
+        db.query(models.Events)
+        .filter(models.Events.user_name.in_(friend_names), models.Events.start_time >= current_time)
+        .order_by(models.Events.start_time.asc())
+        .all()
+    )
+
+    carry_map = {r.friend_name: r.carry_item for r in rules}
+
+    out: List[str] = []
+    for de in demo_events:
+        for fe in friend_events:
+            if not de.location or not fe.location:
+                continue
+            if de.location != fe.location:
+                continue
+            if not _time_overlap(de.start_time, de.end_time, fe.start_time, fe.end_time):
+                continue
+
+            item = carry_map.get(fe.user_name)
+            if item:
+                out.append(item)
+
+    # dedupe keep order
+    unique = []
+    for x in out:
+        if x not in unique:
+            unique.append(x)
+    return unique
+
 # =====================
 # Find CommonItemsByShoe
 # =====================
@@ -461,6 +525,20 @@ def build_mcu_all_items(
     # 4) 去重（避免同一物品重複出現在 recommendations）
     rec_unique = []
     for x in rec_items:
+        if x not in rec_unique:
+            rec_unique.append(x)
+
+    # 5) Friend carry recommendation (append to end)
+    if current_time is None:
+        current_time = datetime.utcnow()
+
+    friend_recs = get_friend_carry_recs_from_events(
+        db=db,
+        demo_user_id=user_id,
+        current_time=current_time,
+    )
+
+    for x in friend_recs:
         if x not in rec_unique:
             rec_unique.append(x)
 

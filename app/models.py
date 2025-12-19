@@ -22,6 +22,7 @@ class Users(Base):
     events = relationship("Events", back_populates="user")
     event_items = relationship("EventItems", back_populates="user")
     reminder_logs = relationship("ReminderLogs", back_populates="user")
+    friends_carry_rules = relationship("FriendsCarryRecommendations")
 
 
 class Events(Base):
@@ -107,3 +108,22 @@ class CommonItemsByShoe(Base):
     shoe_type = Column(Text, nullable=False)    # backend 使用
     item_name = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+class FriendsCarryRecommendations(Base):
+    __tablename__ = "friends_carry_recommendations"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # demo_user 的 users.user_id
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+
+    # friend name (English)
+    friend_name = Column(Text, nullable=False)
+
+    # carry item (English)
+    carry_item = Column(Text, nullable=False)
+
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    # optional relationship (not required, but nice)
+    user = relationship("Users")
